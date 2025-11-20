@@ -198,7 +198,7 @@ export default function ConfiguracionScreen() {
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/(app)/sincronizar')}>
+        <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/(tabs)/sincronizar')}>
           <Text style={styles.actionIcon}>🔄</Text>
           <View style={styles.actionContent}>
             <Text style={styles.actionTitle}>Sincronizar</Text>

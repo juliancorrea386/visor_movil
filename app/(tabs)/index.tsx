@@ -113,7 +113,7 @@ export default function HomeScreen() {
       {pendientes > 0 && (
         <TouchableOpacity
           style={styles.alertCard}
-          onPress={() => router.push('/(app)/sincronizar')}>
+          onPress={() => router.push('/(tabs)/sincronizar')}>
           <View style={styles.alertContent}>
             <Text style={styles.alertIcon}>⚠️</Text>
             <View style={styles.alertText}>
@@ -133,7 +133,7 @@ export default function HomeScreen() {
 
         <TouchableOpacity
           style={styles.actionButton}
-          onPress={() => router.push('/(app)/nueva-cotizacion')}>
+          onPress={() => router.push('/(tabs)/nueva-cotizacion')}>
           <Text style={styles.actionIcon}>➕</Text>
           <View style={styles.actionTextContainer}>
             <Text style={styles.actionTitle}>Nueva Cotización</Text>
@@ -143,7 +143,7 @@ export default function HomeScreen() {
 
         <TouchableOpacity
           style={styles.actionButton}
-          onPress={() => router.push('/(app)/lista')}>
+          onPress={() => router.push('/(tabs)/lista')}>
           <Text style={styles.actionIcon}>📋</Text>
           <View style={styles.actionTextContainer}>
             <Text style={styles.actionTitle}>Ver Cotizaciones</Text>
@@ -153,7 +153,7 @@ export default function HomeScreen() {
 
         <TouchableOpacity
           style={styles.actionButton}
-          onPress={() => router.push('/(app)/sincronizar')}>
+          onPress={() => router.push('/(tabs)/sincronizar')}>
           <Text style={styles.actionIcon}>🔄</Text>
           <View style={styles.actionTextContainer}>
             <Text style={styles.actionTitle}>Sincronizar</Text>
