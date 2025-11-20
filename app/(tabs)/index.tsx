@@ -1,98 +1,300 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+// app/(app)/index.tsx
+import { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+  Alert,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  obtenerEstadisticasHoy,
+  obtenerCotizacionesPendientes,
+} from '@/src/database/db';
+import { verificarConexion, logout } from '@/src/config/api';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const router = useRouter();
+  const [usuario, setUsuario] = useState({ nombre: 'Usuario', rol: 'vendedor' });
+  const [stats, setStats] = useState({ total: 0, monto_total: 0, pendientes: 0 });
+  const [pendientes, setPendientes] = useState(0);
+  const [conexion, setConexion] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  useEffect(() => {
+    cargarDatos();
+  }, []);
+
+  const cargarDatos = async () => {
+    // Cargar usuario
+    try {
+      const usuarioStr = await AsyncStorage.getItem('usuario');
+      if (usuarioStr) {
+        setUsuario(JSON.parse(usuarioStr));
+      }
+    } catch (error) {
+      console.error('Error cargando usuario:', error);
+    }
+
+    // Cargar estadísticas
+    const estadisticas = await obtenerEstadisticasHoy();
+    setStats(estadisticas);
+
+    // Cargar pendientes
+    const cotsPendientes = await obtenerCotizacionesPendientes();
+    setPendientes(cotsPendientes.length);
+
+    // Verificar conexión
+    const tieneConexion = await verificarConexion();
+    setConexion(!!tieneConexion);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await cargarDatos();
+    setRefreshing(false);
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Cerrar Sesión',
+      '¿Estás seguro que deseas salir?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Salir',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            router.replace('/(auth)/login');
+          },
+        },
+      ]
+    );
+  };
+
+  return (
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+      {/* Header con info del usuario */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.greeting}>Hola, {usuario.nombre || 'Usuario'} 👋</Text>
+          <Text style={styles.subGreeting}>
+            {conexion ? '🟢 En línea' : '🔴 Sin conexión'}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
+          <Text style={styles.logoutText}>Salir</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Tarjetas de estadísticas */}
+      <View style={styles.statsContainer}>
+        <View style={[styles.statCard, styles.statCardBlue]}>
+          <Text style={styles.statValue}>{stats.total}</Text>
+          <Text style={styles.statLabel}>Cotizaciones Hoy</Text>
+        </View>
+
+        <View style={[styles.statCard, styles.statCardGreen]}>
+          <Text style={styles.statValue}>
+            ${(stats.monto_total || 0).toLocaleString()}
+          </Text>
+          <Text style={styles.statLabel}>Total del Día</Text>
+        </View>
+      </View>
+
+      {/* Alerta de pendientes */}
+      {pendientes > 0 && (
+        <TouchableOpacity
+          style={styles.alertCard}
+          onPress={() => router.push('/(app)/sincronizar')}>
+          <View style={styles.alertContent}>
+            <Text style={styles.alertIcon}>⚠️</Text>
+            <View style={styles.alertText}>
+              <Text style={styles.alertTitle}>
+                {pendientes} cotización{pendientes > 1 ? 'es' : ''} pendiente
+                {pendientes > 1 ? 's' : ''}
+              </Text>
+              <Text style={styles.alertSubtitle}>Toca para sincronizar</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* Acciones rápidas */}
+      <View style={styles.actionsContainer}>
+        <Text style={styles.sectionTitle}>Acciones Rápidas</Text>
+
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => router.push('/(app)/nueva-cotizacion')}>
+          <Text style={styles.actionIcon}>➕</Text>
+          <View style={styles.actionTextContainer}>
+            <Text style={styles.actionTitle}>Nueva Cotización</Text>
+            <Text style={styles.actionSubtitle}>Crear una nueva cotización</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => router.push('/(app)/lista')}>
+          <Text style={styles.actionIcon}>📋</Text>
+          <View style={styles.actionTextContainer}>
+            <Text style={styles.actionTitle}>Ver Cotizaciones</Text>
+            <Text style={styles.actionSubtitle}>Historial completo</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => router.push('/(app)/sincronizar')}>
+          <Text style={styles.actionIcon}>🔄</Text>
+          <View style={styles.actionTextContainer}>
+            <Text style={styles.actionTitle}>Sincronizar</Text>
+            <Text style={styles.actionSubtitle}>Enviar y recibir datos</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  header: {
+    backgroundColor: '#004080',
+    padding: 20,
+    paddingTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  greeting: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  subGreeting: {
+    fontSize: 14,
+    color: '#fff',
+    marginTop: 4,
+  },
+  logoutButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  logoutText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    padding: 15,
+    gap: 15,
+  },
+  statCard: {
+    flex: 1,
+    padding: 20,
+    borderRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  statCardBlue: {
+    backgroundColor: '#2196F3',
+  },
+  statCardGreen: {
+    backgroundColor: '#4CAF50',
+  },
+  statValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  statLabel: {
+    fontSize: 14,
+    color: '#fff',
+    marginTop: 5,
+  },
+  alertCard: {
+    backgroundColor: '#FFF3CD',
+    margin: 15,
+    padding: 15,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+  },
+  alertContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  alertIcon: {
+    fontSize: 32,
+    marginRight: 12,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  alertText: {
+    flex: 1,
+  },
+  alertTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#856404',
+  },
+  alertSubtitle: {
+    fontSize: 14,
+    color: '#856404',
+    marginTop: 2,
+  },
+  actionsContainer: {
+    padding: 15,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    color: '#333',
+  },
+  actionButton: {
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  actionIcon: {
+    fontSize: 32,
+    marginRight: 15,
+  },
+  actionTextContainer: {
+    flex: 1,
+  },
+  actionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  actionSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
   },
 });
