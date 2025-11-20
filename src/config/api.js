@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 
 // ⚠️ CAMBIAR ESTA URL POR LA DE TU SERVIDOR
-const API_BASE_URL = 'http://localhost:4000/api'; // Cambiar por tu IP local o servidor
+const API_BASE_URL = 'http://172.16.17.154:4000/api'; // Cambiar por tu IP local o servidor
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -212,7 +212,7 @@ export const testConexion = async () => {
       };
     }
 
-    await api.get('/health'); // Endpoint opcional
+    await api.get('/clientes'); // Endpoint opcional
     return {
       success: true,
       mensaje: 'Conexión exitosa con el servidor'

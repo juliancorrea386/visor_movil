@@ -181,7 +181,7 @@ export default function NuevaCotizacionScreen() {
       Alert.alert('Éxito', 'Cotización guardada correctamente', [
         {
           text: 'Ver Lista',
-          onPress: () => router.push('/(app)/lista'),
+          onPress: () => router.push('/(tabs)/lista'),
         },
         {
           text: 'Nueva',
