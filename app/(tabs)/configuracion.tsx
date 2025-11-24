@@ -1,4 +1,4 @@
-// app/(app)/configuracion.tsx
+// app/(tabs)/configuracion.tsx
 import { useState, useEffect } from 'react';
 import {
   View,
@@ -65,7 +65,7 @@ export default function ConfiguracionScreen() {
       return;
     }
 
-    configurarAPIUrl(apiUrl.trim());
+    await configurarAPIUrl(apiUrl.trim());
     setEditandoUrl(false);
 
     // Test de conexión

@@ -3,16 +3,40 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 
-// ⚠️ CAMBIAR ESTA URL POR LA DE TU SERVIDOR
-const API_BASE_URL = 'http://172.16.17.154:4000/api'; // Cambiar por tu IP local o servidor
+// Clave para almacenar la URL de la API
+const API_URL_KEY = 'api_url';
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000, // 30 segundos
+// URL por defecto
+const DEFAULT_API_URL = 'http://172.16.17.154:4000/api';
+
+/**
+ * Obtiene la URL de la API desde AsyncStorage o devuelve la por defecto
+ */
+const getAPIUrl = async () => {
+  try {
+    const savedUrl = await AsyncStorage.getItem(API_URL_KEY);
+    return savedUrl || DEFAULT_API_URL;
+  } catch (error) {
+    console.error('Error obteniendo URL de API:', error);
+    return DEFAULT_API_URL;
+  }
+};
+
+// Inicializar axios
+let api = axios.create({
+  baseURL: DEFAULT_API_URL,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
+// Cargar URL guardada al inicio
+(async () => {
+  const savedUrl = await getAPIUrl();
+  api.defaults.baseURL = savedUrl;
+  console.log('📡 API URL configurada:', savedUrl);
+})();
 
 /**
  * Interceptor para agregar el token JWT a todas las peticiones
@@ -60,7 +84,19 @@ export const login = async (username, password) => {
     
     if (response.data.token) {
       await AsyncStorage.setItem('token', response.data.token);
-      await AsyncStorage.setItem('usuario', JSON.stringify(response.data.usuario));
+      
+      // Solo guardar usuario si existe en la respuesta
+      if (response.data.usuario) {
+        await AsyncStorage.setItem('usuario', JSON.stringify(response.data.usuario));
+      } else {
+        // Si no viene usuario en la respuesta, crear uno básico
+        const usuarioBasico = {
+          username: username,
+          nombre: response.data.nombre || username,
+          rol: response.data.rol || 'vendedor'
+        };
+        await AsyncStorage.setItem('usuario', JSON.stringify(usuarioBasico));
+      }
     }
 
     return {
@@ -71,7 +107,7 @@ export const login = async (username, password) => {
     console.error('❌ Error en login:', error.response?.data || error.message);
     return {
       success: false,
-      error: error.response?.data?.error || 'Error al iniciar sesión'
+      error: error.response?.data?.error || error.response?.data?.message || 'Error al iniciar sesión'
     };
   }
 };
@@ -187,9 +223,14 @@ export const descargarDatosIniciales = async () => {
 /**
  * Configura la URL base de la API
  */
-export const configurarAPIUrl = (nuevaUrl) => {
-  api.defaults.baseURL = nuevaUrl;
-  console.log('✅ URL de API actualizada:', nuevaUrl);
+export const configurarAPIUrl = async (nuevaUrl) => {
+  try {
+    api.defaults.baseURL = nuevaUrl;
+    await AsyncStorage.setItem(API_URL_KEY, nuevaUrl);
+    console.log('✅ URL de API actualizada:', nuevaUrl);
+  } catch (error) {
+    console.error('❌ Error guardando URL:', error);
+  }
 };
 
 /**
@@ -212,7 +253,12 @@ export const testConexion = async () => {
       };
     }
 
-    await api.get('/clientes'); // Endpoint opcional
+    // Usar un endpoint simple que no requiera autenticación
+    await api.get('/clientes').catch(() => {
+      // Si /health no existe, intentar con otro endpoint
+      return api.get('/');
+    });
+    
     return {
       success: true,
       mensaje: 'Conexión exitosa con el servidor'
@@ -221,7 +267,7 @@ export const testConexion = async () => {
     console.error('❌ Error test conexión:', error);
     return {
       success: false,
-      error: 'No se pudo conectar al servidor'
+      error: 'No se pudo conectar al servidor. Verifica la URL.'
     };
   }
 };

@@ -445,4 +445,85 @@ export const obtenerEstadisticasHoy = async () => {
   }
 };
 
+export const actualizarCotizacion = async (idLocal, cotizacion) => {
+  try {
+    // Actualizar cotización principal
+    await db.runAsync(
+      `UPDATE cotizaciones 
+       SET cliente_id = ?,
+           cliente_nombre = ?,
+           cliente_telefono = ?,
+           cliente_municipio = ?,
+           tipo = ?,
+           subtotal = ?,
+           total = ?,
+           saldo = ?,
+           observaciones = ?,
+           sincronizado = 0
+       WHERE id_local = ?`,
+      [
+        cotizacion.cliente_id,
+        cotizacion.cliente_nombre,
+        cotizacion.cliente_telefono,
+        cotizacion.cliente_municipio,
+        cotizacion.tipo,
+        cotizacion.subtotal,
+        cotizacion.total,
+        cotizacion.tipo === 'credito' ? cotizacion.total : 0,
+        cotizacion.observaciones || '',
+        idLocal
+      ]
+    );
+
+    // Eliminar detalles anteriores
+    await db.runAsync(
+      `DELETE FROM cotizacion_detalles WHERE cotizacion_id_local = ?`,
+      [idLocal]
+    );
+
+    // Insertar nuevos detalles
+    for (const producto of cotizacion.productos) {
+      await db.runAsync(
+        `INSERT INTO cotizacion_detalles 
+         (cotizacion_id_local, producto_id, producto_nombre, producto_referencia, 
+          cantidad, precio_venta, subtotal) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          idLocal,
+          producto.producto_id,
+          producto.nombre,
+          producto.referencia,
+          producto.cantidad,
+          producto.precio_venta,
+          producto.cantidad * producto.precio_venta
+        ]
+      );
+    }
+
+    console.log(`✅ Cotización ${idLocal} actualizada`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error actualizando cotización:', error);
+    throw error;
+  }
+};
+
+/**
+ * Elimina una cotización
+ */
+export const eliminarCotizacion = async (idLocal) => {
+  try {
+    // Los detalles se eliminan automáticamente por el ON DELETE CASCADE
+    await db.runAsync(
+      `DELETE FROM cotizaciones WHERE id_local = ?`,
+      [idLocal]
+    );
+    console.log(`✅ Cotización ${idLocal} eliminada`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error eliminando cotización:', error);
+    throw error;
+  }
+};
+
 export default db;

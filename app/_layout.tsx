@@ -1,6 +1,6 @@
 // app/_layout.tsx
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
@@ -12,6 +12,9 @@ import { verificarSesion } from '@/src/config/api';
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
+  const segments = useSegments();
+  
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
@@ -37,9 +40,21 @@ export default function RootLayout() {
     prepare();
   }, []);
 
+  // Protección de rutas - SOLO en la carga inicial
+  useEffect(() => {
+    if (!isReady) return;
+
+    const inAuthGroup = segments[0] === '(auth)';
+
+    // Solo redirigir si no está autenticado
+    if (!isAuthenticated && !inAuthGroup) {
+      router.replace('/(auth)/login');
+    }
+  }, [isReady]);
+
   if (!isReady) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
         <ActivityIndicator size="large" color="#004080" />
       </View>
     );
@@ -48,9 +63,10 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(app)" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="index" />
+        <Stack.Screen name="modal" />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>

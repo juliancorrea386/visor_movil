@@ -1,4 +1,4 @@
-// app/(app)/sincronizar.tsx
+// app/(tabs)/sincronizar.tsx
 import { useState, useEffect } from 'react';
 import {
   View,
@@ -61,28 +61,38 @@ export default function SincronizacionScreen() {
         throw new Error(resultado.error);
       }
 
-      // Marcar como sincronizadas las exitosas
-      if (resultado.data?.detalles) {
-        for (const r of resultado.data.detalles) {
+      const data = resultado.data;
+      let exitosas = 0;
+      let fallidas = 0;
+      const errores: string[] = [];
+
+      // Procesar resultados
+      if (data.detalles) {
+        for (const r of data.detalles) {
           if (r.exito) {
             await marcarComoSincronizada(r.id_local, r.id_servidor);
+            exitosas++;
+          } else {
+            fallidas++;
+            errores.push(`${r.numero_cotizacion || 'Cotización'}: ${r.error}`);
           }
         }
       }
 
-      const exitosas = resultado.data?.exitosas || 0;
-      const fallidas = resultado.data?.fallidas || 0;
-
-      Alert.alert(
-        'Sincronización Completa',
-        `✅ Exitosas: ${exitosas}\n${fallidas > 0 ? `❌ Fallidas: ${fallidas}` : ''}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => cargarDatos(),
-          },
-        ]
-      );
+      // Mostrar resultado
+      if (fallidas === 0) {
+        Alert.alert(
+          '✅ Sincronización Completa',
+          `Se sincronizaron ${exitosas} cotización${exitosas !== 1 ? 'es' : ''} exitosamente.`,
+          [{ text: 'OK', onPress: () => cargarDatos() }]
+        );
+      } else {
+        Alert.alert(
+          '⚠️ Sincronización Parcial',
+          `✅ Exitosas: ${exitosas}\n❌ Fallidas: ${fallidas}\n\nErrores:\n${errores.join('\n')}`,
+          [{ text: 'OK', onPress: () => cargarDatos() }]
+        );
+      }
     } catch (error: any) {
       console.error('Error sincronizando:', error);
       Alert.alert(
@@ -126,7 +136,7 @@ export default function SincronizacionScreen() {
       }
 
       Alert.alert(
-        'Éxito',
+        '✅ Éxito',
         `Datos actualizados:\n\n📦 ${datos.productos?.length || 0} productos\n👥 ${
           datos.clientes?.length || 0
         } clientes\n📍 ${datos.municipios?.length || 0} municipios`
@@ -168,6 +178,9 @@ export default function SincronizacionScreen() {
                 <View style={styles.pendienteInfo}>
                   <Text style={styles.pendienteNumero}>{c.numero_cotizacion}</Text>
                   <Text style={styles.pendienteCliente}>{c.cliente_nombre}</Text>
+                  {c.id_servidor && (
+                    <Text style={styles.pendienteEditado}>✏️ Editada</Text>
+                  )}
                 </View>
                 <Text style={styles.pendienteMonto}>${c.total.toLocaleString()}</Text>
               </View>
@@ -299,6 +312,11 @@ const styles = StyleSheet.create({
   pendienteCliente: {
     fontSize: 13,
     color: '#666',
+    marginTop: 2,
+  },
+  pendienteEditado: {
+    fontSize: 11,
+    color: '#ff9800',
     marginTop: 2,
   },
   pendienteMonto: {

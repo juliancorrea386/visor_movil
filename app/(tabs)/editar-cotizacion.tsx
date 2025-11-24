@@ -1,4 +1,4 @@
-// app/(tabs)/nueva-cotizacion.tsx
+// app/(tabs)/editar-cotizacion.tsx
 import { useState, useEffect } from 'react';
 import {
   View,
@@ -12,12 +12,13 @@ import {
   FlatList,
   ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
-  guardarCotizacion,
-  generarNumeroCotizacion,
+  actualizarCotizacion,
+  obtenerCotizacionPorId,
   obtenerClientesCache,
   obtenerProductosCache,
+  eliminarCotizacion,
 } from '@/src/database/db';
 
 type Cliente = {
@@ -39,8 +40,12 @@ type ProductoCotizacion = Producto & {
   subtotal: number;
 };
 
-export default function NuevaCotizacionScreen() {
+export default function EditarCotizacionScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const idCotizacion = parseInt(params.id as string);
+
+  const [cargando, setCargando] = useState(true);
   const [numero, setNumero] = useState('');
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [tipo, setTipo] = useState<'contado' | 'credito'>('contado');
@@ -61,12 +66,47 @@ export default function NuevaCotizacionScreen() {
   const [cargandoProductos, setCargandoProductos] = useState(false);
 
   useEffect(() => {
-    inicializar();
+    cargarCotizacion();
   }, []);
 
-  const inicializar = async () => {
-    const num = await generarNumeroCotizacion();
-    setNumero(num);
+  const cargarCotizacion = async () => {
+    setCargando(true);
+    try {
+      const cotizacion = await obtenerCotizacionPorId(idCotizacion);
+      
+      if (!cotizacion) {
+        Alert.alert('Error', 'No se encontró la cotización');
+        router.back();
+        return;
+      }
+
+      setNumero(cotizacion.numero_cotizacion);
+      setCliente({
+        id: cotizacion.cliente_id,
+        nombre: cotizacion.cliente_nombre,
+        telefono: cotizacion.cliente_telefono,
+        municipio: cotizacion.cliente_municipio,
+      });
+      setTipo(cotizacion.tipo);
+      setObservaciones(cotizacion.observaciones || '');
+
+      // Convertir productos
+      const productosFormateados = cotizacion.productos.map((p: any) => ({
+        id: p.producto_id,
+        nombre: p.producto_nombre,
+        Referencia: p.producto_referencia,
+        precio_venta: p.precio_venta,
+        cantidad: p.cantidad,
+        subtotal: p.subtotal,
+      }));
+      setProductos(productosFormateados);
+    } catch (error) {
+      console.error('Error cargando cotización:', error);
+      Alert.alert('Error', 'No se pudo cargar la cotización');
+      router.back();
+    } finally {
+      setCargando(false);
+    }
   };
 
   const buscarClientes = async (texto: string) => {
@@ -76,11 +116,6 @@ export default function NuevaCotizacionScreen() {
     try {
       const resultados = await obtenerClientesCache(texto);
       setClientes(resultados as Cliente[]);
-      
-      if (resultados.length === 0 && texto.length > 0) {
-        // Si no hay resultados, mostrar mensaje
-        console.log('No se encontraron clientes');
-      }
     } catch (error) {
       console.error('Error buscando clientes:', error);
     } finally {
@@ -95,10 +130,6 @@ export default function NuevaCotizacionScreen() {
     try {
       const resultados = await obtenerProductosCache(texto);
       setProductosDisponibles(resultados as Producto[]);
-      
-      if (resultados.length === 0 && texto.length > 0) {
-        console.log('No se encontraron productos');
-      }
     } catch (error) {
       console.error('Error buscando productos:', error);
     } finally {
@@ -212,8 +243,6 @@ export default function NuevaCotizacionScreen() {
       const total = calcularTotal();
 
       const cotizacion = {
-        numero_cotizacion: numero,
-        fecha: new Date().toISOString().split('T')[0],
         cliente_id: cliente!.id,
         cliente_nombre: cliente!.nombre,
         cliente_telefono: cliente!.telefono || '',
@@ -231,53 +260,65 @@ export default function NuevaCotizacionScreen() {
         })),
       };
 
-      await guardarCotizacion(cotizacion);
+      await actualizarCotizacion(idCotizacion, cotizacion);
 
-      Alert.alert('✅ Éxito', 'Cotización guardada correctamente', [
+      Alert.alert('✅ Éxito', 'Cotización actualizada correctamente', [
         {
-          text: 'Ver Lista',
-          onPress: () => {
-            limpiarFormulario();
-            router.push('/(tabs)/lista');
-          },
-        },
-        {
-          text: 'Nueva Cotización',
-          onPress: () => {
-            limpiarFormulario();
-          },
+          text: 'OK',
+          onPress: () => router.back(),
         },
       ]);
     } catch (error) {
-      console.error('Error guardando:', error);
-      Alert.alert('Error', 'No se pudo guardar la cotización');
+      console.error('Error actualizando:', error);
+      Alert.alert('Error', 'No se pudo actualizar la cotización');
     } finally {
       setGuardando(false);
     }
   };
 
-  const limpiarFormulario = async () => {
-    // Generar nuevo número
-    const nuevoNumero = await generarNumeroCotizacion();
-    setNumero(nuevoNumero);
-    
-    // Limpiar todos los campos
-    setCliente(null);
-    setProductos([]);
-    setObservaciones('');
-    setTipo('contado');
+  const confirmarEliminar = () => {
+    Alert.alert(
+      '⚠️ Eliminar Cotización',
+      '¿Estás seguro que deseas eliminar esta cotización? Esta acción no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await eliminarCotizacion(idCotizacion);
+              Alert.alert('✅ Eliminada', 'Cotización eliminada correctamente', [
+                { text: 'OK', onPress: () => router.back() },
+              ]);
+            } catch (error) {
+              Alert.alert('Error', 'No se pudo eliminar la cotización');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const irASincronizar = () => {
     Alert.alert(
       '📥 Descargar Datos',
-      'Parece que no tienes clientes o productos descargados. ¿Quieres ir a la pantalla de sincronización para descargarlos?',
+      'Parece que no tienes clientes o productos descargados. ¿Quieres ir a la pantalla de sincronización?',
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Ir a Sincronizar', onPress: () => router.push('/(tabs)/sincronizar') },
       ]
     );
   };
+
+  if (cargando) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#004080" />
+        <Text style={styles.loadingText}>Cargando cotización...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -340,7 +381,6 @@ export default function NuevaCotizacionScreen() {
                 <Text style={styles.productoNombre}>{prod.nombre}</Text>
                 <Text style={styles.productoRef}>{prod.Referencia}</Text>
                 
-                {/* Precio editable */}
                 <View style={styles.precioContainer}>
                   <Text style={styles.precioLabel}>Precio: $</Text>
                   <TextInput
@@ -390,10 +430,23 @@ export default function NuevaCotizacionScreen() {
           <Text style={styles.totalLabel}>Total:</Text>
           <Text style={styles.totalValue}>${calcularTotal().toLocaleString()}</Text>
         </View>
+
+        {/* Botón eliminar */}
+        <View style={styles.section}>
+          <TouchableOpacity style={styles.eliminarCotizacionButton} onPress={confirmarEliminar}>
+            <Text style={styles.eliminarCotizacionButtonText}>🗑️ Eliminar Cotización</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
-      {/* Botón guardar */}
+      {/* Botones de acción */}
       <View style={styles.footer}>
+        <TouchableOpacity
+          style={styles.cancelarButton}
+          onPress={() => router.back()}
+          disabled={guardando}>
+          <Text style={styles.cancelarButtonText}>Cancelar</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.guardarButton, guardando && styles.guardarButtonDisabled]}
           onPress={guardar}
@@ -401,7 +454,7 @@ export default function NuevaCotizacionScreen() {
           {guardando ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.guardarButtonText}>Guardar Cotización</Text>
+            <Text style={styles.guardarButtonText}>Guardar Cambios</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -427,17 +480,11 @@ export default function NuevaCotizacionScreen() {
           {cargandoClientes ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#004080" />
-              <Text style={styles.loadingText}>Buscando clientes...</Text>
             </View>
           ) : clientes.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>👥</Text>
               <Text style={styles.emptyTitle}>No hay clientes</Text>
-              <Text style={styles.emptySubtitle}>
-                {busquedaCliente
-                  ? 'No se encontraron resultados'
-                  : 'Descarga los datos del servidor'}
-              </Text>
               <TouchableOpacity style={styles.syncButton} onPress={irASincronizar}>
                 <Text style={styles.syncButtonText}>📥 Ir a Sincronizar</Text>
               </TouchableOpacity>
@@ -449,9 +496,7 @@ export default function NuevaCotizacionScreen() {
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.listItem} onPress={() => seleccionarCliente(item)}>
                   <Text style={styles.listItemTitle}>{item.nombre}</Text>
-                  <Text style={styles.listItemSubtitle}>
-                    CC: {item.id} • {item.municipio || 'N/A'}
-                  </Text>
+                  <Text style={styles.listItemSubtitle}>CC: {item.id}</Text>
                 </TouchableOpacity>
               )}
             />
@@ -480,17 +525,11 @@ export default function NuevaCotizacionScreen() {
           {cargandoProductos ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#004080" />
-              <Text style={styles.loadingText}>Buscando productos...</Text>
             </View>
           ) : productosDisponibles.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>📦</Text>
               <Text style={styles.emptyTitle}>No hay productos</Text>
-              <Text style={styles.emptySubtitle}>
-                {busquedaProducto
-                  ? 'No se encontraron resultados'
-                  : 'Descarga los datos del servidor'}
-              </Text>
               <TouchableOpacity style={styles.syncButton} onPress={irASincronizar}>
                 <Text style={styles.syncButtonText}>📥 Ir a Sincronizar</Text>
               </TouchableOpacity>
@@ -515,10 +554,22 @@ export default function NuevaCotizacionScreen() {
   );
 }
 
+// Aquí van los mismos estilos que nueva-cotizacion.tsx, más estos adicionales:
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#666',
   },
   scroll: {
     flex: 1,
@@ -644,11 +695,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     minWidth: 80,
   },
-  productoPrecio: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
-  },
   productoActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -711,13 +757,43 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#4CAF50',
   },
+  eliminarCotizacionButton: {
+    backgroundColor: '#ffebee',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ef5350',
+  },
+  eliminarCotizacionButtonText: {
+    color: '#d32f2f',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
   footer: {
     backgroundColor: '#fff',
     padding: 15,
+    flexDirection: 'row',
+    gap: 10,
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },
+  cancelarButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  cancelarButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   guardarButton: {
+    flex: 2,
     backgroundColor: '#004080',
     padding: 16,
     borderRadius: 10,
@@ -773,17 +849,6 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 4,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 14,
-    color: '#666',
-  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -798,12 +863,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 5,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
     marginBottom: 20,
   },
   syncButton: {
