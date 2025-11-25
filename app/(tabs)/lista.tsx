@@ -1,4 +1,4 @@
-// app/(tabs)/lista.tsx
+// app/(tabs)/lista.tsx - Versión con impresión
 import { useState, useEffect } from 'react';
 import {
   View,
@@ -10,10 +10,13 @@ import {
   Alert,
   Modal,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { obtenerCotizaciones, obtenerCotizacionPorId } from '@/src/database/db';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { imprimirCotizacion } from '@/src/utils/printer';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ListaCotizacionesScreen() {
   const router = useRouter();
@@ -23,14 +26,28 @@ export default function ListaCotizacionesScreen() {
   const [mostrarDatePicker, setMostrarDatePicker] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [filtroActivo, setFiltroActivo] = useState<'hoy' | 'semana' | 'mes' | 'todas'>('hoy');
+  const [imprimiendo, setImprimiendo] = useState<number | null>(null);
+  const [impresoraConectada, setImpresoraConectada] = useState<any>(null);
 
   useEffect(() => {
     cargarCotizaciones();
+    verificarImpresora();
   }, []);
 
   useEffect(() => {
     aplicarFiltro();
   }, [fechaSeleccionada, todasCotizaciones, filtroActivo]);
+
+  const verificarImpresora = async () => {
+    try {
+      const guardada = await AsyncStorage.getItem('impresora_guardada');
+      if (guardada) {
+        setImpresoraConectada(JSON.parse(guardada));
+      }
+    } catch (error) {
+      console.error('Error verificando impresora:', error);
+    }
+  };
 
   const cargarCotizaciones = async () => {
     const cots = await obtenerCotizaciones();
@@ -40,6 +57,7 @@ export default function ListaCotizacionesScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     await cargarCotizaciones();
+    await verificarImpresora();
     setRefreshing(false);
   };
 
@@ -68,7 +86,6 @@ export default function ListaCotizacionesScreen() {
         return fecha.getMonth() === mes && fecha.getFullYear() === año;
       });
     }
-    // Si es 'todas', no filtra nada
 
     setCotizacionesFiltradas(filtradas);
   };
@@ -112,8 +129,78 @@ ${cotizacion.tipo === 'credito' ? `SALDO: ${cotizacion.saldo.toLocaleString()}` 
           pathname: '/(tabs)/editar-cotizacion',
           params: { id: idLocal }
         })
+      },
+      {
+        text: '🖨️ Imprimir',
+        onPress: () => manejarImpresion(idLocal)
       }
     ]);
+  };
+
+  const manejarImpresion = async (idLocal: number) => {
+    if (!impresoraConectada) {
+      Alert.alert(
+        'Sin Impresora',
+        'No hay una impresora conectada. ¿Deseas configurar una ahora?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { 
+            text: 'Configurar', 
+            onPress: () => router.push('/(tabs)/impresora')
+          }
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Imprimir Cotización',
+      `¿Deseas imprimir esta cotización en ${impresoraConectada.name}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Imprimir', onPress: () => imprimirCot(idLocal) }
+      ]
+    );
+  };
+
+  const imprimirCot = async (idLocal: number) => {
+    setImprimiendo(idLocal);
+    
+    try {
+      const cotizacion = await obtenerCotizacionPorId(idLocal);
+      
+      if (!cotizacion) {
+        Alert.alert('Error', 'No se encontró la cotización');
+        return;
+      }
+
+      const resultado = await imprimirCotizacion(cotizacion);
+
+      if (resultado.success) {
+        Alert.alert('✅ Éxito', 'Cotización impresa correctamente');
+      } else {
+        Alert.alert(
+          '❌ Error de Impresión',
+          resultado.error || 'No se pudo imprimir la cotización. Verifica que la impresora esté encendida y conectada.',
+          [
+            { text: 'Reintentar', onPress: () => imprimirCot(idLocal) },
+            { text: 'Cancelar', style: 'cancel' }
+          ]
+        );
+      }
+    } catch (error: any) {
+      console.error('Error imprimiendo cotización:', error);
+      Alert.alert(
+        'Error',
+        'Error al imprimir: ' + error.message,
+        [
+          { text: 'Configurar Impresora', onPress: () => router.push('/(tabs)/impresora') },
+          { text: 'Cancelar', style: 'cancel' }
+        ]
+      );
+    } finally {
+      setImprimiendo(null);
+    }
   };
 
   const calcularTotales = () => {
@@ -125,36 +212,53 @@ ${cotizacion.tipo === 'credito' ? `SALDO: ${cotizacion.saldo.toLocaleString()}` 
   };
 
   const renderItem = ({ item }: any) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => verDetalle(item.id_local)}
-      activeOpacity={0.7}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.numero}>{item.numero_cotizacion}</Text>
-        <View
-          style={[
-            styles.badge,
-            item.sincronizado ? styles.badgeSincronizado : styles.badgePendiente,
-          ]}>
-          <Text style={styles.badgeText}>
-            {item.sincronizado ? '✓ Sync' : '⏳ Pendiente'}
-          </Text>
+    <View style={styles.card}>
+      <TouchableOpacity
+        onPress={() => verDetalle(item.id_local)}
+        activeOpacity={0.7}
+        style={styles.cardContent}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.numero}>{item.numero_cotizacion}</Text>
+          <View
+            style={[
+              styles.badge,
+              item.sincronizado ? styles.badgeSincronizado : styles.badgePendiente,
+            ]}>
+            <Text style={styles.badgeText}>
+              {item.sincronizado ? '✓ Sync' : '⏳ Pendiente'}
+            </Text>
+          </View>
         </View>
-      </View>
 
-      <Text style={styles.cliente} numberOfLines={1}>
-        {item.cliente_nombre}
-      </Text>
-      <Text style={styles.fecha}>{formatearFecha(item.fecha)}</Text>
+        <Text style={styles.cliente} numberOfLines={1}>
+          {item.cliente_nombre}
+        </Text>
+        <Text style={styles.fecha}>{formatearFecha(item.fecha)}</Text>
 
-      <View style={styles.cardFooter}>
-        <View>
-          <Text style={styles.tipo}>{item.tipo.toUpperCase()}</Text>
-          <Text style={styles.productos}>{item.productos?.length || 0} productos</Text>
+        <View style={styles.cardFooter}>
+          <View>
+            <Text style={styles.tipo}>{item.tipo.toUpperCase()}</Text>
+            <Text style={styles.productos}>{item.productos?.length || 0} productos</Text>
+          </View>
+          <Text style={styles.total}>${item.total.toLocaleString()}</Text>
         </View>
-        <Text style={styles.total}>${item.total.toLocaleString()}</Text>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+
+      {/* Botón de impresión */}
+      <TouchableOpacity
+        style={styles.printButton}
+        onPress={() => manejarImpresion(item.id_local)}
+        disabled={imprimiendo === item.id_local}>
+        {imprimiendo === item.id_local ? (
+          <ActivityIndicator size="small" color="#004080" />
+        ) : (
+          <>
+            <Text style={styles.printIcon}>🖨️</Text>
+            <Text style={styles.printText}>Imprimir</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </View>
   );
 
   const totales = calcularTotales();
@@ -200,7 +304,6 @@ ${cotizacion.tipo === 'credito' ? `SALDO: ${cotizacion.saldo.toLocaleString()}` 
           </TouchableOpacity>
         </View>
 
-        {/* Selector de fecha */}
         {filtroActivo !== 'todas' && (
           <TouchableOpacity
             style={styles.selectorFecha}
@@ -212,6 +315,21 @@ ${cotizacion.tipo === 'credito' ? `SALDO: ${cotizacion.saldo.toLocaleString()}` 
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Estado de impresora */}
+      {impresoraConectada && (
+        <View style={styles.impresoraBar}>
+          <Text style={styles.impresoraBarIcon}>🖨️</Text>
+          <Text style={styles.impresoraBarText}>
+            {impresoraConectada.name}
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.push('/(tabs)/impresora')}
+            style={styles.impresoraBarButton}>
+            <Text style={styles.impresoraBarButtonText}>Cambiar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Resumen */}
       <View style={styles.resumen}>
@@ -367,6 +485,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
   },
+  impresoraBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4CAF50',
+  },
+  impresoraBarIcon: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  impresoraBarText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#2E7D32',
+    fontWeight: '600',
+  },
+  impresoraBarButton: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  impresoraBarButtonText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   resumen: {
     flexDirection: 'row',
     backgroundColor: '#fff',
@@ -407,7 +556,6 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#fff',
-    padding: 15,
     borderRadius: 12,
     marginBottom: 12,
     shadowColor: '#000',
@@ -415,6 +563,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 2,
+    overflow: 'hidden',
+  },
+  cardContent: {
+    padding: 15,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -477,6 +629,24 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#4CAF50',
+  },
+  printButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E3F2FD',
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#BBDEFB',
+  },
+  printIcon: {
+    fontSize: 18,
+    marginRight: 6,
+  },
+  printText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1976D2',
   },
   emptyContainer: {
     flex: 1,
