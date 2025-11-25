@@ -75,6 +75,16 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="cartera"
+        options={{
+          title: 'Cartera',
+          headerTitle: 'Cartera',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="chevron.right" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="configuracion"
         options={{
           title: 'Config',

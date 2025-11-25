@@ -111,6 +111,7 @@ export default function LoginScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               editable={!loading}
+              importantForAutofill="no"
             />
           </View>
 
