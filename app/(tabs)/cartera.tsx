@@ -1,4 +1,4 @@
-// app/(tabs)/cartera.tsx
+// app/(tabs)/cartera.tsx - ACTUALIZADO para manejar datos agrupados por cliente
 import { useState, useEffect } from 'react';
 import {
     View,
@@ -14,20 +14,22 @@ import {
     Platform,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { obtenerMunicipiosCache, obtenerClientesCache } from '@/src/database/db';
+import { obtenerMunicipiosCache } from '@/src/database/db';
 import api from '@/src/config/api';
 
-type Cartera = {
+type Cotizacion = {
     id: number;
     numero_cotizacion: string;
     fecha: string;
-    cliente_id: string;
-    cliente_nombre: string;
-    municipio?: string;
-    subtotal: number;
-    abonado: number;
+    total: number;
     saldo: number;
-    estado: string;
+};
+
+type ClienteCartera = {
+    id: string;
+    nombre: string;
+    municipio: string;
+    cotizaciones: Cotizacion[];
 };
 
 type Municipio = {
@@ -35,31 +37,26 @@ type Municipio = {
     nombre: string;
 };
 
-type Cliente = {
-    id: string;
-    nombre: string;
-};
-
 export default function CarteraScreen() {
-    const [cartera, setCartera] = useState<Cartera[]>([]);
-    const [carteraFiltrada, setCarteraFiltrada] = useState<Cartera[]>([]);
+    const [cartera, setCartera] = useState<ClienteCartera[]>([]);
+    const [carteraFiltrada, setCarteraFiltrada] = useState<ClienteCartera[]>([]);
     const [cargando, setCargando] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
 
     // Filtros
     const [busqueda, setBusqueda] = useState('');
+    const [fechaDesde, setFechaDesde] = useState(new Date(new Date().getFullYear(), 0, 1)); // 1 enero del año actual
     const [fechaHasta, setFechaHasta] = useState(new Date());
     const [municipioSeleccionado, setMunicipioSeleccionado] = useState<number>(0);
-    const [clienteSeleccionado, setClienteSeleccionado] = useState<string>('');
 
     // Modales
-    const [modalFecha, setModalFecha] = useState(false);
+    const [modalFechaDesde, setModalFechaDesde] = useState(false);
+    const [modalFechaHasta, setModalFechaHasta] = useState(false);
     const [modalMunicipios, setModalMunicipios] = useState(false);
-    const [modalClientes, setModalClientes] = useState(false);
 
     // Datos para filtros
     const [municipios, setMunicipios] = useState<Municipio[]>([]);
-    const [clientes, setClientes] = useState<Cliente[]>([]);
+    const [clienteExpandido, setClienteExpandido] = useState<string | null>(null);
 
     useEffect(() => {
         cargarDatos();
@@ -67,7 +64,7 @@ export default function CarteraScreen() {
 
     useEffect(() => {
         aplicarFiltros();
-    }, [busqueda, cartera, municipioSeleccionado, clienteSeleccionado, fechaHasta]);
+    }, [busqueda, cartera]);
 
     const cargarDatos = async () => {
         setCargando(true);
@@ -75,10 +72,6 @@ export default function CarteraScreen() {
             // Cargar municipios
             const munis = await obtenerMunicipiosCache();
             setMunicipios(munis as Municipio[]);
-
-            // Cargar clientes
-            const clis = await obtenerClientesCache('');
-            setClientes(clis as Cliente[]);
 
             // Cargar cartera desde servidor
             await cargarCartera();
@@ -93,15 +86,27 @@ export default function CarteraScreen() {
         try {
             // Construir query params
             const params: any = {
-                tipo: 'credito', // Solo créditos
-                estado: 'Pendiente,Abonada', // Con saldo pendiente
+                desde: formatearFechaISO(fechaDesde),
+                hasta: formatearFechaISO(fechaHasta),
             };
 
-            const response = await api.get('/cotizaciones', { params });
+            if (municipioSeleccionado > 0) {
+                params.municipios = municipioSeleccionado.toString();
+            }
+
+            const response = await api.get('/cartera', { params });
             const datos = response.data || [];
 
-            setCartera(datos);
-            console.log(`✅ ${datos.length} cotizaciones en cartera`);
+            const datosSanitizados = datos.map((cliente: ClienteCartera) => ({
+                ...cliente,
+                cotizaciones: cliente.cotizaciones.map(c => ({
+                    ...c,
+                    total: Number(c.total),
+                    saldo: Number(c.saldo),
+                }))
+            }));
+            setCartera(datosSanitizados);
+            console.log(`✅ ${datos.length} clientes en cartera`);
         } catch (error) {
             console.error('Error cargando cartera:', error);
             Alert.alert('Error', 'No se pudo cargar la cartera');
@@ -121,152 +126,178 @@ export default function CarteraScreen() {
         if (busqueda.trim()) {
             filtrada = filtrada.filter(
                 (c) =>
-                    c.cliente_nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-                    c.cliente_id.toLowerCase().includes(busqueda.toLowerCase()) ||
-                    c.numero_cotizacion.toLowerCase().includes(busqueda.toLowerCase())
+                    c.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
+                    c.id.toLowerCase().includes(busqueda.toLowerCase())
             );
         }
-
-        // Filtro por cliente específico
-        if (clienteSeleccionado) {
-            filtrada = filtrada.filter((c) => c.cliente_id === clienteSeleccionado);
-        }
-
-        // Filtro por municipio
-        if (municipioSeleccionado > 0) {
-            const municipioNombre = municipios.find((m) => m.id === municipioSeleccionado)?.nombre;
-            if (municipioNombre) {
-                filtrada = filtrada.filter((c) => c.municipio === municipioNombre);
-            }
-        }
-
-        // Filtro por fecha (hasta)
-        const fechaLimite = formatearFechaISO(fechaHasta);
-        filtrada = filtrada.filter((c) => {
-            const fechaCot = c.fecha.split('-').reverse().join('-'); // DD-MM-YYYY → YYYY-MM-DD
-            return fechaCot <= fechaLimite;
-        });
 
         setCarteraFiltrada(filtrada);
     };
 
     const limpiarFiltros = () => {
         setBusqueda('');
-        setClienteSeleccionado('');
         setMunicipioSeleccionado(0);
+        setFechaDesde(new Date(new Date().getFullYear(), 0, 1));
         setFechaHasta(new Date());
-    };
-
-    const seleccionarCliente = (cliente: Cliente) => {
-        setClienteSeleccionado(cliente.id);
-        setModalClientes(false);
+        cargarCartera();
     };
 
     const seleccionarMunicipio = (municipio: Municipio) => {
         setMunicipioSeleccionado(municipio.id);
         setModalMunicipios(false);
+        // Recargar cartera con el nuevo filtro
+        setTimeout(() => cargarCartera(), 100);
     };
 
-    const cambiarFecha = (event: any, selectedDate?: Date) => {
-        setModalFecha(Platform.OS === 'ios');
+    const cambiarFechaDesde = (event: any, selectedDate?: Date) => {
+        setModalFechaDesde(Platform.OS === 'ios');
         if (selectedDate) {
-            setFechaHasta(selectedDate);
+            setFechaDesde(selectedDate);
+            // Recargar cartera con el nuevo filtro
+            setTimeout(() => cargarCartera(), 100);
         }
     };
 
-    const verDetalle = (item: Cartera) => {
-        const porcentajePagado = ((item.abonado / item.subtotal) * 100).toFixed(1);
+    const cambiarFechaHasta = (event: any, selectedDate?: Date) => {
+        setModalFechaHasta(Platform.OS === 'ios');
+        if (selectedDate) {
+            setFechaHasta(selectedDate);
+            // Recargar cartera con el nuevo filtro
+            setTimeout(() => cargarCartera(), 100);
+        }
+    };
+
+    const toggleCliente = (clienteId: string) => {
+        if (clienteExpandido === clienteId) {
+            setClienteExpandido(null);
+        } else {
+            setClienteExpandido(clienteId);
+        }
+    };
+
+    const verDetalleCliente = (cliente: ClienteCartera) => {
+        const totalDeuda = cliente.cotizaciones.reduce((sum, c) => sum + c.saldo, 0);
+        const totalFacturado = cliente.cotizaciones.reduce((sum, c) => sum + c.total, 0);
+        const porcentajePagado = ((totalFacturado - totalDeuda) / totalFacturado * 100).toFixed(1);
+
+        const detalleCotizaciones = cliente.cotizaciones.map(cot =>
+            `${cot.numero_cotizacion} - ${formatearFechaCorta(new Date(cot.fecha))}\n  Total: $${cot.total.toLocaleString()} | Saldo: $${cot.saldo.toLocaleString()}`
+        ).join('\n\n');
 
         Alert.alert(
-            `📋 ${item.numero_cotizacion}`,
+            `💰 ${cliente.nombre}`,
             `
-Cliente: ${item.cliente_nombre}
-Cédula: ${item.cliente_id}
-${item.municipio ? `Municipio: ${item.municipio}` : ''}
-Fecha: ${item.fecha}
+CC: ${cliente.id}
+Municipio: ${cliente.municipio || 'N/A'}
 
-💰 Total: $${item.subtotal.toLocaleString()}
-✅ Abonado: $${item.abonado.toLocaleString()} (${porcentajePagado}%)
-⏳ Saldo: $${item.saldo.toLocaleString()}
+📊 Resumen:
+Total Facturado: $${totalFacturado.toLocaleString()}
+Total Abonado: $${(totalFacturado - totalDeuda).toLocaleString()}
+Saldo Pendiente: $${totalDeuda.toLocaleString()}
+% Pagado: ${porcentajePagado}%
 
-Estado: ${item.estado}
+📋 Cotizaciones (${cliente.cotizaciones.length}):
+${detalleCotizaciones}
       `.trim()
         );
     };
 
     const calcularTotales = () => {
-        const totalDeuda = carteraFiltrada.reduce((sum, c) => sum + c.saldo, 0);
-        const totalAbonado = carteraFiltrada.reduce((sum, c) => sum + c.abonado, 0);
-        const totalGeneral = carteraFiltrada.reduce((sum, c) => sum + c.subtotal, 0);
+        let totalDeuda = 0;
+        let totalFacturado = 0;
+        let totalCotizaciones = 0;
 
-        return { totalDeuda, totalAbonado, totalGeneral };
+        carteraFiltrada.forEach(cliente => {
+            cliente.cotizaciones.forEach(cot => {
+                totalDeuda += cot.saldo;
+                totalFacturado += cot.total;
+                totalCotizaciones++;
+            });
+        });
+
+        const totalAbonado = totalFacturado - totalDeuda;
+
+        return { totalDeuda, totalAbonado, totalFacturado, totalCotizaciones };
     };
 
-    const renderItem = ({ item }: { item: Cartera }) => {
-        const porcentajePagado = ((item.abonado / item.subtotal) * 100).toFixed(0);
+    const renderCliente = ({ item }: { item: ClienteCartera }) => {
+        const totalDeuda = item.cotizaciones.reduce((sum, c) => sum + c.saldo, 0);
+        const totalFacturado = item.cotizaciones.reduce((sum, c) => sum + c.total, 0);
+        const porcentajePagado = ((totalFacturado - totalDeuda) / totalFacturado * 100).toFixed(0);
+        const expandido = clienteExpandido === item.id;
 
         return (
-            <TouchableOpacity
-                style={styles.card}
-                onPress={() => verDetalle(item)}
-                activeOpacity={0.7}>
-                <View style={styles.cardHeader}>
-                    <Text style={styles.numero}>{item.numero_cotizacion}</Text>
-                    <View
-                        style={[
-                            styles.badge,
-                            item.estado === 'Pendiente' ? styles.badgePendiente : styles.badgeAbonada,
-                        ]}>
-                        <Text style={styles.badgeText}>{item.estado}</Text>
+            <View style={styles.card}>
+                <TouchableOpacity
+                    onPress={() => toggleCliente(item.id)}
+                    onLongPress={() => verDetalleCliente(item)}
+                    activeOpacity={0.7}>
+                    <View style={styles.cardHeader}>
+                        <View style={styles.clienteInfo}>
+                            <Text style={styles.clienteNombre}>{item.nombre}</Text>
+                            <Text style={styles.clienteCedula}>CC: {item.id}</Text>
+                            {item.municipio && (
+                                <Text style={styles.municipio}>📍 {item.municipio}</Text>
+                            )}
+                        </View>
+                        <Text style={styles.expandIcon}>{expandido ? '▼' : '▶'}</Text>
                     </View>
-                </View>
 
-                <Text style={styles.cliente}>{item.cliente_nombre}</Text>
-                <Text style={styles.cedula}>CC: {item.cliente_id}</Text>
-                {item.municipio && (
-                    <Text style={styles.municipio}>📍 {item.municipio}</Text>
+                    <View style={styles.progressContainer}>
+                        <View style={styles.progressBar}>
+                            <View
+                                style={[
+                                    styles.progressFill,
+                                    { width: `${porcentajePagado}%` as `${number}%` },
+                                ]}
+                            />
+                        </View>
+                        <Text style={styles.progressText}>{porcentajePagado}% pagado</Text>
+                    </View>
+
+                    <View style={styles.cardFooter}>
+                        <View style={styles.montoContainer}>
+                            <Text style={styles.montoLabel}>Total:</Text>
+                            <Text style={styles.montoValue}>${totalFacturado.toLocaleString()}</Text>
+                        </View>
+                        <View style={styles.montoContainer}>
+                            <Text style={styles.montoLabel}>Saldo:</Text>
+                            <Text style={[styles.montoValue, styles.montoSaldo]}>
+                                ${totalDeuda.toLocaleString()}
+                            </Text>
+                        </View>
+                        <View style={styles.montoContainer}>
+                            <Text style={styles.montoLabel}>Cotizaciones:</Text>
+                            <Text style={styles.montoValue}>{item.cotizaciones.length}</Text>
+                        </View>
+                    </View>
+                </TouchableOpacity>
+
+                {/* Detalles expandidos */}
+                {expandido && (
+                    <View style={styles.detallesContainer}>
+                        <Text style={styles.detallesTitulo}>Cotizaciones:</Text>
+                        {item.cotizaciones.map((cot) => (
+                            <View key={cot.id} style={styles.cotizacionItem}>
+                                <View style={styles.cotizacionInfo}>
+                                    <Text style={styles.cotizacionNumero}>{cot.numero_cotizacion}</Text>
+                                    <Text style={styles.cotizacionFecha}>
+                                        {formatearFechaCorta(new Date(cot.fecha))}
+                                    </Text>
+                                </View>
+                                <View style={styles.cotizacionMontos}>
+                                    <Text style={styles.cotizacionTotal}>Total: ${cot.total.toLocaleString()}</Text>
+                                    <Text style={styles.cotizacionSaldo}>Saldo: ${cot.saldo.toLocaleString()}</Text>
+                                </View>
+                            </View>
+                        ))}
+                    </View>
                 )}
-                <Text style={styles.fecha}>{item.fecha}</Text>
-
-                <View style={styles.progressContainer}>
-                    <View style={styles.progressBar}>
-                        <View
-                            style={[
-                                styles.progressFill,
-                                { width: `${porcentajePagado}%` as `${number}%` },
-                            ]}
-                        />
-
-                    </View>
-                    <Text style={styles.progressText}>{porcentajePagado}% pagado</Text>
-                </View>
-
-                <View style={styles.cardFooter}>
-                    <View style={styles.montoContainer}>
-                        <Text style={styles.montoLabel}>Total:</Text>
-                        <Text style={styles.montoValue}>${item.subtotal.toLocaleString()}</Text>
-                    </View>
-                    <View style={styles.montoContainer}>
-                        <Text style={styles.montoLabel}>Abonado:</Text>
-                        <Text style={[styles.montoValue, styles.montoAbonado]}>
-                            ${item.abonado.toLocaleString()}
-                        </Text>
-                    </View>
-                    <View style={styles.montoContainer}>
-                        <Text style={styles.montoLabel}>Saldo:</Text>
-                        <Text style={[styles.montoValue, styles.montoSaldo]}>
-                            ${item.saldo.toLocaleString()}
-                        </Text>
-                    </View>
-                </View>
-            </TouchableOpacity>
+            </View>
         );
     };
 
     const totales = calcularTotales();
-    const clienteNombre = clienteSeleccionado
-        ? clientes.find((c) => c.id === clienteSeleccionado)?.nombre
-        : null;
     const municipioNombre = municipioSeleccionado
         ? municipios.find((m) => m.id === municipioSeleccionado)?.nombre
         : null;
@@ -277,21 +308,13 @@ Estado: ${item.estado}
             <View style={styles.filtrosContainer}>
                 <TextInput
                     style={styles.searchInput}
-                    placeholder="Buscar por nombre, cédula o #cotización..."
+                    placeholder="Buscar por nombre o cédula..."
                     value={busqueda}
                     onChangeText={setBusqueda}
                     importantForAutofill="no"
                 />
 
                 <View style={styles.filtrosRow}>
-                    <TouchableOpacity
-                        style={styles.filtroButton}
-                        onPress={() => setModalClientes(true)}>
-                        <Text style={styles.filtroButtonText}>
-                            {clienteNombre || '👤 Cliente'}
-                        </Text>
-                    </TouchableOpacity>
-
                     <TouchableOpacity
                         style={styles.filtroButton}
                         onPress={() => setModalMunicipios(true)}>
@@ -302,46 +325,32 @@ Estado: ${item.estado}
 
                     <TouchableOpacity
                         style={styles.filtroButton}
-                        onPress={() => setModalFecha(true)}>
+                        onPress={() => setModalFechaDesde(true)}>
+                        <Text style={styles.filtroButtonText}>
+                            📅 {formatearFechaCorta(fechaDesde)}
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={styles.filtroButton}
+                        onPress={() => setModalFechaHasta(true)}>
                         <Text style={styles.filtroButtonText}>
                             📅 {formatearFechaCorta(fechaHasta)}
                         </Text>
                     </TouchableOpacity>
                 </View>
 
-                {(clienteSeleccionado || municipioSeleccionado > 0 || busqueda) && (
+                {(municipioSeleccionado > 0 || busqueda) && (
                     <TouchableOpacity style={styles.limpiarButton} onPress={limpiarFiltros}>
                         <Text style={styles.limpiarButtonText}>🗑️ Limpiar filtros</Text>
                     </TouchableOpacity>
                 )}
             </View>
 
-            {/* Resumen de totales */}
-            <View style={styles.totalesContainer}>
-                <View style={styles.totalItem}>
-                    <Text style={styles.totalLabel}>Total Deuda</Text>
-                    <Text style={[styles.totalValue, styles.totalDeuda]}>
-                        ${totales.totalDeuda.toLocaleString()}
-                    </Text>
-                </View>
-                <View style={styles.totalDivider} />
-                <View style={styles.totalItem}>
-                    <Text style={styles.totalLabel}>Abonado</Text>
-                    <Text style={[styles.totalValue, styles.totalAbonado]}>
-                        ${totales.totalAbonado.toLocaleString()}
-                    </Text>
-                </View>
-                <View style={styles.totalDivider} />
-                <View style={styles.totalItem}>
-                    <Text style={styles.totalLabel}>Total</Text>
-                    <Text style={styles.totalValue}>${totales.totalGeneral.toLocaleString()}</Text>
-                </View>
-            </View>
-
             {/* Contador */}
             <View style={styles.summary}>
                 <Text style={styles.summaryText}>
-                    {carteraFiltrada.length} cotización{carteraFiltrada.length !== 1 ? 'es' : ''} en cartera
+                    {carteraFiltrada.length} cliente{carteraFiltrada.length !== 1 ? 's' : ''} • {totales.totalCotizaciones} cotización{totales.totalCotizaciones !== 1 ? 'es' : ''}
                 </Text>
             </View>
 
@@ -356,7 +365,7 @@ Estado: ${item.estado}
                     <Text style={styles.emptyIcon}>💰</Text>
                     <Text style={styles.emptyTitle}>No hay cartera</Text>
                     <Text style={styles.emptySubtitle}>
-                        {busqueda || clienteSeleccionado || municipioSeleccionado
+                        {busqueda || municipioSeleccionado
                             ? 'No se encontraron resultados con los filtros aplicados'
                             : 'No hay cotizaciones pendientes'}
                     </Text>
@@ -364,8 +373,8 @@ Estado: ${item.estado}
             ) : (
                 <FlatList
                     data={carteraFiltrada}
-                    keyExtractor={(item) => item.id.toString()}
-                    renderItem={renderItem}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderCliente}
                     contentContainerStyle={styles.list}
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -373,32 +382,32 @@ Estado: ${item.estado}
                 />
             )}
 
-            {/* Modal Fecha */}
-            {modalFecha && (
+            {/* Modal Fecha Desde */}
+            {modalFechaDesde && (
                 <Modal
                     transparent={true}
                     animationType="fade"
-                    visible={modalFecha}
-                    onRequestClose={() => setModalFecha(false)}>
+                    visible={modalFechaDesde}
+                    onRequestClose={() => setModalFechaDesde(false)}>
                     <View style={styles.modalOverlay}>
                         <View style={styles.datePickerContainer}>
                             <View style={styles.modalHeader}>
-                                <Text style={styles.modalTitle}>Fecha Hasta</Text>
-                                <TouchableOpacity onPress={() => setModalFecha(false)}>
+                                <Text style={styles.modalTitle}>Fecha Desde</Text>
+                                <TouchableOpacity onPress={() => setModalFechaDesde(false)}>
                                     <Text style={styles.modalClose}>✕</Text>
                                 </TouchableOpacity>
                             </View>
                             <DateTimePicker
-                                value={fechaHasta}
+                                value={fechaDesde}
                                 mode="date"
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                onChange={cambiarFecha}
-                                maximumDate={new Date()}
+                                onChange={cambiarFechaDesde}
+                                maximumDate={fechaHasta}
                             />
                             {Platform.OS === 'ios' && (
                                 <TouchableOpacity
                                     style={styles.datePickerBoton}
-                                    onPress={() => setModalFecha(false)}>
+                                    onPress={() => setModalFechaDesde(false)}>
                                     <Text style={styles.datePickerBotonTexto}>Aceptar</Text>
                                 </TouchableOpacity>
                             )}
@@ -407,44 +416,40 @@ Estado: ${item.estado}
                 </Modal>
             )}
 
-            {/* Modal Clientes */}
-            <Modal
-                visible={modalClientes}
-                animationType="slide"
-                onRequestClose={() => setModalClientes(false)}>
-                <View style={styles.modal}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Seleccionar Cliente</Text>
-                        <TouchableOpacity onPress={() => setModalClientes(false)}>
-                            <Text style={styles.modalClose}>✕</Text>
-                        </TouchableOpacity>
+            {/* Modal Fecha Hasta */}
+            {modalFechaHasta && (
+                <Modal
+                    transparent={true}
+                    animationType="fade"
+                    visible={modalFechaHasta}
+                    onRequestClose={() => setModalFechaHasta(false)}>
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.datePickerContainer}>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>Fecha Hasta</Text>
+                                <TouchableOpacity onPress={() => setModalFechaHasta(false)}>
+                                    <Text style={styles.modalClose}>✕</Text>
+                                </TouchableOpacity>
+                            </View>
+                            <DateTimePicker
+                                value={fechaHasta}
+                                mode="date"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                onChange={cambiarFechaHasta}
+                                minimumDate={fechaDesde}
+                                maximumDate={new Date()}
+                            />
+                            {Platform.OS === 'ios' && (
+                                <TouchableOpacity
+                                    style={styles.datePickerBoton}
+                                    onPress={() => setModalFechaHasta(false)}>
+                                    <Text style={styles.datePickerBotonTexto}>Aceptar</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
                     </View>
-
-                    <TouchableOpacity
-                        style={styles.listItem}
-                        onPress={() => {
-                            setClienteSeleccionado('');
-                            setModalClientes(false);
-                        }}>
-                        <Text style={[styles.listItemTitle, styles.listItemAll]}>
-                            Todos los clientes
-                        </Text>
-                    </TouchableOpacity>
-
-                    <FlatList
-                        data={clientes}
-                        keyExtractor={(item) => item.id}
-                        renderItem={({ item }) => (
-                            <TouchableOpacity
-                                style={styles.listItem}
-                                onPress={() => seleccionarCliente(item)}>
-                                <Text style={styles.listItemTitle}>{item.nombre}</Text>
-                                <Text style={styles.listItemSubtitle}>CC: {item.id}</Text>
-                            </TouchableOpacity>
-                        )}
-                    />
-                </View>
-            </Modal>
+                </Modal>
+            )}
 
             {/* Modal Municipios */}
             <Modal
@@ -464,6 +469,7 @@ Estado: ${item.estado}
                         onPress={() => {
                             setMunicipioSeleccionado(0);
                             setModalMunicipios(false);
+                            setTimeout(() => cargarCartera(), 100);
                         }}>
                         <Text style={[styles.listItemTitle, styles.listItemAll]}>
                             Todos los municipios
@@ -527,7 +533,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     filtroButtonText: {
-        fontSize: 13,
+        fontSize: 12,
         color: '#666',
         fontWeight: '600',
     },
@@ -607,34 +613,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginBottom: 10,
     },
-    numero: {
-        fontSize: 16,
+    clienteInfo: {
+        flex: 1,
+    },
+    clienteNombre: {
+        fontSize: 18,
         fontWeight: 'bold',
-        color: '#004080',
-    },
-    badge: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-    },
-    badgePendiente: {
-        backgroundColor: '#ff9800',
-    },
-    badgeAbonada: {
-        backgroundColor: '#2196F3',
-    },
-    badgeText: {
-        color: '#fff',
-        fontSize: 11,
-        fontWeight: 'bold',
-    },
-    cliente: {
-        fontSize: 16,
-        fontWeight: '600',
         color: '#333',
         marginBottom: 4,
     },
-    cedula: {
+    clienteCedula: {
         fontSize: 14,
         color: '#666',
         marginBottom: 2,
@@ -642,12 +630,11 @@ const styles = StyleSheet.create({
     municipio: {
         fontSize: 13,
         color: '#666',
-        marginBottom: 2,
     },
-    fecha: {
-        fontSize: 13,
-        color: '#999',
-        marginBottom: 10,
+    expandIcon: {
+        fontSize: 20,
+        color: '#666',
+        marginLeft: 10,
     },
     progressContainer: {
         marginBottom: 12,
@@ -688,10 +675,53 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#333',
     },
-    montoAbonado: {
-        color: '#4CAF50',
-    },
     montoSaldo: {
+        color: '#f44336',
+    },
+    detallesContainer: {
+        marginTop: 15,
+        paddingTop: 15,
+        borderTopWidth: 1,
+        borderTopColor: '#eee',
+    },
+    detallesTitulo: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#666',
+        marginBottom: 10,
+    },
+    cotizacionItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        backgroundColor: '#f9f9f9',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 8,
+    },
+    cotizacionInfo: {
+        flex: 1,
+    },
+    cotizacionNumero: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: '#004080',
+        marginBottom: 2,
+    },
+    cotizacionFecha: {
+        fontSize: 11,
+        color: '#999',
+    },
+    cotizacionMontos: {
+        alignItems: 'flex-end',
+    },
+    cotizacionTotal: {
+        fontSize: 12,
+        color: '#666',
+        marginBottom: 2,
+    },
+    cotizacionSaldo: {
+        fontSize: 13,
+        fontWeight: 'bold',
         color: '#f44336',
     },
     loadingContainer: {
@@ -778,11 +808,6 @@ const styles = StyleSheet.create({
     listItemTitle: {
         fontSize: 16,
         color: '#333',
-    },
-    listItemSubtitle: {
-        fontSize: 14,
-        color: '#666',
-        marginTop: 4,
     },
     listItemAll: {
         color: '#004080',
