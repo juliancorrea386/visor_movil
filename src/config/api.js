@@ -1,14 +1,15 @@
 // src/config/api.js
-import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 import * as Network from 'expo-network';
 
 // Clave para almacenar la URL de la API
 const API_URL_KEY = 'api_url';
 
 // URL por defecto
-const DEFAULT_API_URL = 'http://172.16.17.154:4000/api';
-
+//const DEFAULT_API_URL = 'http://192.168.1.31:4000/api';
+const DEFAULT_API_URL = 'http://172.27.19.222:4000/api';
+//const DEFAULT_API_URL = 'http://149.130.180.164:4000/api';
 /**
  * Obtiene la URL de la API desde AsyncStorage o devuelve la por defecto
  */
@@ -216,6 +217,39 @@ export const descargarDatosIniciales = async () => {
     return {
       success: false,
       error: error.response?.data?.error || error.message || 'Error al descargar datos'
+    };
+  }
+};
+
+/**
+ * Descarga cotizaciones del servidor
+ */
+export const descargarCotizaciones = async (opciones = {}) => {
+  try {
+    const tieneConexion = await verificarConexion();
+    if (!tieneConexion) {
+      throw new Error('No hay conexión a internet');
+    }
+
+    // Construir parámetros de filtro
+    const params = {};
+    if (opciones.desde) params.desde = opciones.desde;
+    if (opciones.hasta) params.hasta = opciones.hasta;
+    if (opciones.usuario_id) params.usuario_id = opciones.usuario_id;
+
+    const response = await api.get('/sync/cotizaciones', { params });
+    
+    console.log('✅ Cotizaciones descargadas:', response.data.total);
+
+    return {
+      success: true,
+      data: response.data.cotizaciones || []
+    };
+  } catch (error) {
+    console.error('❌ Error descargando cotizaciones:', error.response?.data || error.message);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Error al descargar cotizaciones'
     };
   }
 };

@@ -15,15 +15,25 @@ import {
   guardarProductosCache,
   guardarClientesCache,
   guardarMunicipiosCache,
+  reconciliarCotizaciones,
+  obtenerEstadisticasSincronizacion,
 } from '@/src/database/db';
 import {
   sincronizarCotizaciones,
   descargarDatosIniciales,
+  descargarCotizaciones,
   verificarConexion,
 } from '@/src/config/api';
 
 export default function SincronizacionScreen() {
   const [pendientes, setPendientes] = useState<any[]>([]);
+  const [estadisticas, setEstadisticas] = useState({
+    total: 0,
+    sincronizadas: 0,
+    pendientes: 0,
+    solo_locales: 0,
+    del_servidor: 0,
+  });
   const [loading, setLoading] = useState(false);
   const [progreso, setProgreso] = useState('');
   const [conexion, setConexion] = useState(false);
@@ -36,23 +46,92 @@ export default function SincronizacionScreen() {
     const cots = await obtenerCotizacionesPendientes();
     setPendientes(cots);
 
+    const stats = await obtenerEstadisticasSincronizacion();
+    setEstadisticas(stats);
+
     const tieneConexion = await verificarConexion();
     setConexion(!!tieneConexion);
   };
 
-  const sincronizar = async () => {
-    if (pendientes.length === 0) {
-      Alert.alert('Info', 'No hay cotizaciones pendientes');
-      return;
-    }
-
+  const sincronizarCompleto = async () => {
     if (!conexion) {
       Alert.alert('Sin Conexión', 'No hay conexión a internet. Verifica tu conexión e intenta de nuevo.');
       return;
     }
 
+    Alert.alert(
+      '🔄 Sincronización Completa',
+      '¿Deseas sincronizar todas las cotizaciones?\n\n1️⃣ Enviar pendientes al servidor\n2️⃣ Descargar del servidor\n3️⃣ Reconciliar cambios',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Sincronizar', onPress: ejecutarSincronizacionCompleta }
+      ]
+    );
+  };
+
+  const ejecutarSincronizacionCompleta = async () => {
     setLoading(true);
-    setProgreso('Enviando cotizaciones...');
+    
+    try {
+      // PASO 1: Enviar cotizaciones pendientes
+      if (pendientes.length > 0) {
+        setProgreso('📤 Enviando cotizaciones pendientes...');
+        await enviarPendientes();
+      }
+
+      // PASO 2: Descargar cotizaciones del servidor
+      setProgreso('📥 Descargando cotizaciones del servidor...');
+      const resultadoDescarga = await descargarCotizaciones({
+        // Puedes agregar filtros aquí si quieres
+        // desde: '2024-01-01',
+        // hasta: new Date().toISOString().split('T')[0]
+      });
+
+      if (!resultadoDescarga.success) {
+        throw new Error(resultadoDescarga.error);
+      }
+
+      // PASO 3: Reconciliar con la base de datos local
+      setProgreso('🔄 Reconciliando cotizaciones...');
+      const resultadoReconciliacion = await reconciliarCotizaciones(
+        resultadoDescarga.data
+      );
+
+      // Recargar datos
+      await cargarDatos();
+
+      // Mostrar resumen
+      Alert.alert(
+        '✅ Sincronización Completa',
+        `
+🔼 Enviadas: ${pendientes.length}
+🔽 Descargadas: ${resultadoDescarga.data.length}
+
+📊 Resultado:
+- Insertadas: ${resultadoReconciliacion.insertadas}
+- Actualizadas: ${resultadoReconciliacion.actualizadas}
+- Omitidas: ${resultadoReconciliacion.omitidas}
+- Eliminadas: ${resultadoReconciliacion.eliminadas}
+
+Total local: ${estadisticas.total + resultadoReconciliacion.insertadas - resultadoReconciliacion.eliminadas}
+        `.trim()
+      );
+    } catch (error: any) {
+      console.error('Error en sincronización completa:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'No se pudo completar la sincronización'
+      );
+    } finally {
+      setLoading(false);
+      setProgreso('');
+    }
+  };
+
+  const enviarPendientes = async () => {
+    if (pendientes.length === 0) {
+      return;
+    }
 
     try {
       const resultado = await sincronizarCotizaciones(pendientes);
@@ -62,46 +141,20 @@ export default function SincronizacionScreen() {
       }
 
       const data = resultado.data;
-      let exitosas = 0;
-      let fallidas = 0;
-      const errores: string[] = [];
-
-      // Procesar resultados
+      
+      // Marcar como sincronizadas las exitosas
       if (data.detalles) {
         for (const r of data.detalles) {
           if (r.exito) {
             await marcarComoSincronizada(r.id_local, r.id_servidor);
-            exitosas++;
-          } else {
-            fallidas++;
-            errores.push(`${r.numero_cotizacion || 'Cotización'}: ${r.error}`);
           }
         }
       }
 
-      // Mostrar resultado
-      if (fallidas === 0) {
-        Alert.alert(
-          '✅ Sincronización Completa',
-          `Se sincronizaron ${exitosas} cotización${exitosas !== 1 ? 'es' : ''} exitosamente.`,
-          [{ text: 'OK', onPress: () => cargarDatos() }]
-        );
-      } else {
-        Alert.alert(
-          '⚠️ Sincronización Parcial',
-          `✅ Exitosas: ${exitosas}\n❌ Fallidas: ${fallidas}\n\nErrores:\n${errores.join('\n')}`,
-          [{ text: 'OK', onPress: () => cargarDatos() }]
-        );
-      }
+      console.log(`✅ ${data.exitosas} cotizaciones enviadas exitosamente`);
     } catch (error: any) {
-      console.error('Error sincronizando:', error);
-      Alert.alert(
-        'Error',
-        error.message || 'No se pudo sincronizar. Verifica tu conexión e intenta de nuevo.'
-      );
-    } finally {
-      setLoading(false);
-      setProgreso('');
+      console.error('Error enviando pendientes:', error);
+      throw error;
     }
   };
 
@@ -112,7 +165,7 @@ export default function SincronizacionScreen() {
     }
 
     setLoading(true);
-    setProgreso('Descargando datos del servidor...');
+    setProgreso('📥 Descargando productos, clientes y municipios...');
 
     try {
       const resultado = await descargarDatosIniciales();
@@ -163,15 +216,65 @@ export default function SincronizacionScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Enviar cotizaciones */}
+      {/* Estadísticas */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>📤 Enviar Cotizaciones</Text>
+        <Text style={styles.cardTitle}>📊 Estado de Cotizaciones</Text>
+        
+        <View style={styles.statsGrid}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{estadisticas.total}</Text>
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, styles.statSuccess]}>{estadisticas.sincronizadas}</Text>
+            <Text style={styles.statLabel}>Sincronizadas</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, styles.statWarning]}>{estadisticas.pendientes}</Text>
+            <Text style={styles.statLabel}>Pendientes</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, styles.statInfo]}>{estadisticas.del_servidor}</Text>
+            <Text style={styles.statLabel}>Del Servidor</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Sincronización completa */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🔄 Sincronización Completa</Text>
         <Text style={styles.cardSubtitle}>
-          {pendientes.length} cotización{pendientes.length !== 1 ? 'es' : ''} pendiente
-          {pendientes.length !== 1 ? 's' : ''}
+          Envía cotizaciones pendientes y descarga las del servidor
         </Text>
 
         {pendientes.length > 0 && (
+          <View style={styles.alertBox}>
+            <Text style={styles.alertIcon}>⚠️</Text>
+            <Text style={styles.alertText}>
+              Tienes {pendientes.length} cotización{pendientes.length !== 1 ? 'es' : ''} pendiente
+              {pendientes.length !== 1 ? 's' : ''} de enviar
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[styles.button, styles.primaryButton, !conexion && styles.buttonDisabled]}
+          onPress={sincronizarCompleto}
+          disabled={loading || !conexion}>
+          <Text style={styles.buttonText}>
+            {loading && progreso.includes('Sincronizando') ? 'Sincronizando...' : '🔄 Sincronizar Todo'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Cotizaciones pendientes */}
+      {pendientes.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>📤 Cotizaciones Pendientes</Text>
+          <Text style={styles.cardSubtitle}>
+            {pendientes.length} cotización{pendientes.length !== 1 ? 'es' : ''} sin sincronizar
+          </Text>
+
           <View style={styles.listContainer}>
             {pendientes.slice(0, 5).map((c) => (
               <View key={c.id_local} style={styles.pendienteItem}>
@@ -189,26 +292,19 @@ export default function SincronizacionScreen() {
               <Text style={styles.masItems}>+{pendientes.length - 5} más...</Text>
             )}
           </View>
-        )}
+        </View>
+      )}
 
-        <TouchableOpacity
-          style={[styles.button, styles.primaryButton, !conexion && styles.buttonDisabled]}
-          onPress={sincronizar}
-          disabled={loading || pendientes.length === 0 || !conexion}>
-          <Text style={styles.buttonText}>
-            {loading && progreso.includes('Enviando') ? 'Enviando...' : 'Sincronizar Ahora'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Descargar datos */}
+      {/* Descargar datos maestros */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>📥 Actualizar Datos</Text>
-        <Text style={styles.cardSubtitle}>Descargar productos, clientes y municipios actualizados del servidor</Text>
+        <Text style={styles.cardTitle}>📥 Actualizar Datos Maestros</Text>
+        <Text style={styles.cardSubtitle}>
+          Descargar productos, clientes y municipios actualizados
+        </Text>
 
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            💡 Descarga los datos más recientes para trabajar offline
+            💡 Actualiza los catálogos para trabajar con la información más reciente
           </Text>
         </View>
 
@@ -217,7 +313,7 @@ export default function SincronizacionScreen() {
           onPress={descargarDatos}
           disabled={loading || !conexion}>
           <Text style={styles.buttonText}>
-            {loading && progreso.includes('Descargando') ? 'Descargando...' : 'Descargar Datos'}
+            {loading && progreso.includes('productos') ? 'Descargando...' : '📥 Descargar Datos'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -289,8 +385,58 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 15,
   },
-  listContainer: {
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  statItem: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: '#f9f9f9',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  statSuccess: {
+    color: '#4CAF50',
+  },
+  statWarning: {
+    color: '#ff9800',
+  },
+  statInfo: {
+    color: '#2196F3',
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 5,
+  },
+  alertBox: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF3CD',
+    padding: 12,
+    borderRadius: 8,
     marginBottom: 15,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FF9800',
+  },
+  alertIcon: {
+    fontSize: 20,
+    marginRight: 10,
+  },
+  alertText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#856404',
+  },
+  listContainer: {
+    marginTop: 10,
   },
   pendienteItem: {
     flexDirection: 'row',

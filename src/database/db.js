@@ -526,4 +526,263 @@ export const eliminarCotizacion = async (idLocal) => {
   }
 };
 
+// ==================== SINCRONIZACIÓN BIDIRECCIONAL ====================
+
+/**
+ * Reconcilia cotizaciones del servidor con las locales
+ */
+export const reconciliarCotizaciones = async (cotizacionesServidor) => {
+  try {
+    console.log(`🔄 Iniciando reconciliación de ${cotizacionesServidor.length} cotizaciones...`);
+
+    let insertadas = 0;
+    let actualizadas = 0;
+    let omitidas = 0;
+
+    for (const cotServidor of cotizacionesServidor) {
+      // Buscar si existe localmente (por numero_cotizacion o id_servidor)
+      const cotLocal = await db.getFirstAsync(
+        `SELECT * FROM cotizaciones 
+         WHERE numero_cotizacion = ? OR id_servidor = ?`,
+        [cotServidor.numero_cotizacion, cotServidor.id_servidor]
+      );
+
+      if (cotLocal) {
+        // Ya existe localmente
+        
+        if (cotLocal.sincronizado === 1) {
+          // Está sincronizada → ACTUALIZAR con datos del servidor (el servidor es la verdad)
+          await actualizarDesdeSincronizacion(cotLocal.id_local, cotServidor);
+          actualizadas++;
+          console.log(`✏️ Actualizada: ${cotServidor.numero_cotizacion}`);
+        } else {
+          // NO está sincronizada → OMITIR (tiene cambios locales pendientes)
+          omitidas++;
+          console.log(`⏭️ Omitida (pendiente local): ${cotServidor.numero_cotizacion}`);
+        }
+      } else {
+        // NO existe localmente → INSERTAR como nueva
+        await insertarDesdeSincronizacion(cotServidor);
+        insertadas++;
+        console.log(`➕ Insertada: ${cotServidor.numero_cotizacion}`);
+      }
+    }
+
+    // Detectar cotizaciones eliminadas en el servidor
+    const eliminadas = await detectarEliminadas(cotizacionesServidor);
+
+    console.log(`✅ Reconciliación completa:`, {
+      insertadas,
+      actualizadas,
+      omitidas,
+      eliminadas
+    });
+
+    return {
+      insertadas,
+      actualizadas,
+      omitidas,
+      eliminadas
+    };
+  } catch (error) {
+    console.error('❌ Error en reconciliación:', error);
+    throw error;
+  }
+};
+
+/**
+ * Actualiza una cotización local con datos del servidor
+ */
+const actualizarDesdeSincronizacion = async (idLocal, cotServidor) => {
+  try {
+    // Actualizar cotización principal
+    await db.runAsync(
+      `UPDATE cotizaciones 
+       SET id_servidor = ?,
+           fecha = ?,
+           cliente_id = ?,
+           cliente_nombre = ?,
+           cliente_telefono = ?,
+           cliente_municipio = ?,
+           tipo = ?,
+           subtotal = ?,
+           total = ?,
+           saldo = ?,
+           observaciones = ?,
+           sincronizado = 1,
+           fecha_sincronizacion = datetime('now')
+       WHERE id_local = ?`,
+      [
+        cotServidor.id_servidor,
+        cotServidor.fecha,
+        cotServidor.cliente_id,
+        cotServidor.cliente_nombre || '',
+        cotServidor.cliente_telefono || '',
+        cotServidor.cliente_municipio || '',
+        cotServidor.tipo,
+        cotServidor.subtotal,
+        cotServidor.total,
+        cotServidor.saldo || 0,
+        cotServidor.observaciones || '',
+        idLocal
+      ]
+    );
+
+    // Eliminar detalles anteriores
+    await db.runAsync(
+      `DELETE FROM cotizacion_detalles WHERE cotizacion_id_local = ?`,
+      [idLocal]
+    );
+
+    // Insertar nuevos detalles
+    for (const prod of cotServidor.productos) {
+      await db.runAsync(
+        `INSERT INTO cotizacion_detalles 
+         (cotizacion_id_local, producto_id, producto_nombre, producto_referencia, 
+          cantidad, precio_venta, subtotal) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          idLocal,
+          prod.producto_id,
+          prod.producto_nombre || '',
+          prod.producto_referencia || '',
+          prod.cantidad,
+          prod.precio_venta,
+          prod.subtotal
+        ]
+      );
+    }
+  } catch (error) {
+    console.error('❌ Error actualizando desde sincronización:', error);
+    throw error;
+  }
+};
+
+/**
+ * Inserta una cotización del servidor como nueva local
+ */
+const insertarDesdeSincronizacion = async (cotServidor) => {
+  try {
+    // Insertar cotización principal
+    const result = await db.runAsync(
+      `INSERT INTO cotizaciones 
+       (id_servidor, numero_cotizacion, fecha, cliente_id, cliente_nombre, 
+        cliente_telefono, cliente_municipio, tipo, subtotal, total, saldo, 
+        observaciones, sincronizado, fecha_sincronizacion) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))`,
+      [
+        cotServidor.id_servidor,
+        cotServidor.numero_cotizacion,
+        cotServidor.fecha,
+        cotServidor.cliente_id,
+        cotServidor.cliente_nombre || '',
+        cotServidor.cliente_telefono || '',
+        cotServidor.cliente_municipio || '',
+        cotServidor.tipo,
+        cotServidor.subtotal,
+        cotServidor.total,
+        cotServidor.saldo || 0,
+        cotServidor.observaciones || ''
+      ]
+    );
+
+    const idLocal = result.lastInsertRowId;
+
+    // Insertar detalles
+    for (const prod of cotServidor.productos) {
+      await db.runAsync(
+        `INSERT INTO cotizacion_detalles 
+         (cotizacion_id_local, producto_id, producto_nombre, producto_referencia, 
+          cantidad, precio_venta, subtotal) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          idLocal,
+          prod.producto_id,
+          prod.producto_nombre || '',
+          prod.producto_referencia || '',
+          prod.cantidad,
+          prod.precio_venta,
+          prod.subtotal
+        ]
+      );
+    }
+  } catch (error) {
+    console.error('❌ Error insertando desde sincronización:', error);
+    throw error;
+  }
+};
+
+/**
+ * Detecta y elimina cotizaciones que fueron eliminadas en el servidor
+ */
+const detectarEliminadas = async (cotizacionesServidor) => {
+  try {
+    // Obtener todas las cotizaciones locales sincronizadas
+    const cotizacionesLocales = await db.getAllAsync(
+      `SELECT id_local, id_servidor, numero_cotizacion 
+       FROM cotizaciones 
+       WHERE sincronizado = 1 AND id_servidor IS NOT NULL`
+    );
+
+    // Crear un Set con los IDs del servidor
+    const idsServidor = new Set(
+      cotizacionesServidor.map(c => c.id_servidor)
+    );
+
+    let eliminadas = 0;
+
+    // Verificar cada cotización local
+    for (const cotLocal of cotizacionesLocales) {
+      // Si no está en el servidor → fue eliminada
+      if (!idsServidor.has(cotLocal.id_servidor)) {
+        await db.runAsync(
+          `DELETE FROM cotizaciones WHERE id_local = ?`,
+          [cotLocal.id_local]
+        );
+        eliminadas++;
+        console.log(`🗑️ Eliminada (borrada en servidor): ${cotLocal.numero_cotizacion}`);
+      }
+    }
+
+    return eliminadas;
+  } catch (error) {
+    console.error('❌ Error detectando eliminadas:', error);
+    return 0;
+  }
+};
+
+/**
+ * Obtiene estadísticas de sincronización
+ */
+export const obtenerEstadisticasSincronizacion = async () => {
+  try {
+    const stats = await db.getFirstAsync(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN sincronizado = 1 THEN 1 ELSE 0 END) as sincronizadas,
+        SUM(CASE WHEN sincronizado = 0 THEN 1 ELSE 0 END) as pendientes,
+        SUM(CASE WHEN id_servidor IS NULL THEN 1 ELSE 0 END) as solo_locales,
+        SUM(CASE WHEN id_servidor IS NOT NULL THEN 1 ELSE 0 END) as del_servidor
+      FROM cotizaciones
+    `);
+
+    return stats || { 
+      total: 0, 
+      sincronizadas: 0, 
+      pendientes: 0,
+      solo_locales: 0,
+      del_servidor: 0
+    };
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    return { 
+      total: 0, 
+      sincronizadas: 0, 
+      pendientes: 0,
+      solo_locales: 0,
+      del_servidor: 0
+    };
+  }
+};
+
 export default db;

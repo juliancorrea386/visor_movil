@@ -61,34 +61,80 @@ export default function ListaCotizacionesScreen() {
     setRefreshing(false);
   };
 
-  const aplicarFiltro = () => {
-    let filtradas = [...todasCotizaciones];
+  // Helpers: normaliza a string 'YYYY-MM-DD' y devuelve Date "start of day"
+const getISODateString = (input: string | Date | undefined | null) => {
+  if (!input) return null;
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 
-    if (filtroActivo === 'hoy') {
-      const hoy = formatearFechaISO(fechaSeleccionada);
-      filtradas = filtradas.filter(c => c.fecha === hoy);
-    } else if (filtroActivo === 'semana') {
-      const inicioSemana = new Date(fechaSeleccionada);
-      inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay());
-      const finSemana = new Date(inicioSemana);
-      finSemana.setDate(finSemana.getDate() + 6);
-      
+const startOfDay = (d: Date) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const endOfDay = (d: Date) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
+// Reemplaza aplicarFiltro por esto:
+const aplicarFiltro = () => {
+  let filtradas = [...todasCotizaciones];
+
+  if (filtroActivo === 'hoy') {
+    const hoyISO = getISODateString(fechaSeleccionada);
+    if (hoyISO) {
       filtradas = filtradas.filter(c => {
-        const fecha = new Date(c.fecha);
-        return fecha >= inicioSemana && fecha <= finSemana;
+        const iso = getISODateString(c.fecha);
+        return iso === hoyISO;
       });
-    } else if (filtroActivo === 'mes') {
-      const mes = fechaSeleccionada.getMonth();
-      const año = fechaSeleccionada.getFullYear();
-      
-      filtradas = filtradas.filter(c => {
-        const fecha = new Date(c.fecha);
-        return fecha.getMonth() === mes && fecha.getFullYear() === año;
-      });
+    } else {
+      filtradas = [];
     }
+  } else if (filtroActivo === 'semana') {
+    // definir inicio de semana (domingo) y fin (sábado)
+    const fecha = new Date(fechaSeleccionada);
+    const inicioSemana = startOfDay(new Date(fecha.setDate(fecha.getDate() - fecha.getDay())));
+    const finSemana = endOfDay(new Date(inicioSemana.getFullYear(), inicioSemana.getMonth(), inicioSemana.getDate() + 6));
 
-    setCotizacionesFiltradas(filtradas);
-  };
+    filtradas = filtradas.filter(c => {
+      const d = new Date(c.fecha);
+      if (isNaN(d.getTime())) {
+        // si la fecha no parsea, intentar tratar como 'YYYY-MM-DD'
+        const iso = getISODateString(c.fecha);
+        if (!iso) return false;
+        const parsed = new Date(iso + 'T00:00:00');
+        return parsed >= inicioSemana && parsed <= finSemana;
+      }
+      const sd = startOfDay(d);
+      return sd >= inicioSemana && sd <= finSemana;
+    });
+  } else if (filtroActivo === 'mes') {
+    const mes = fechaSeleccionada.getMonth();
+    const año = fechaSeleccionada.getFullYear();
+
+    filtradas = filtradas.filter(c => {
+      const d = new Date(c.fecha);
+      if (isNaN(d.getTime())) {
+        const iso = getISODateString(c.fecha);
+        if (!iso) return false;
+        const parsed = new Date(iso + 'T00:00:00');
+        return parsed.getMonth() === mes && parsed.getFullYear() === año;
+      }
+      return d.getMonth() === mes && d.getFullYear() === año;
+    });
+  }
+
+  setCotizacionesFiltradas(filtradas);
+};
+
 
   const cambiarFecha = (event: any, selectedDate?: Date) => {
     setMostrarDatePicker(Platform.OS === 'ios');
