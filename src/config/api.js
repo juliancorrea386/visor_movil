@@ -8,7 +8,7 @@ const API_URL_KEY = 'api_url';
 
 // URL por defecto
 //const DEFAULT_API_URL = 'http://192.168.1.31:4000/api';
-const DEFAULT_API_URL = 'http://172.27.19.222:4000/api';
+const DEFAULT_API_URL = 'http://172.27.26.47:4000/api';
 //const DEFAULT_API_URL = 'http://149.130.180.164:4000/api';
 /**
  * Obtiene la URL de la API desde AsyncStorage o devuelve la por defecto

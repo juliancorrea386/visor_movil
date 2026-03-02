@@ -1,30 +1,31 @@
 // app/(tabs)/sincronizar.tsx
-import { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  ScrollView,
-  ActivityIndicator,
-} from 'react-native';
-import {
-  obtenerCotizacionesPendientes,
-  marcarComoSincronizada,
-  guardarProductosCache,
-  guardarClientesCache,
-  guardarMunicipiosCache,
-  reconciliarCotizaciones,
-  obtenerEstadisticasSincronizacion,
-} from '@/src/database/db';
-import {
-  sincronizarCotizaciones,
-  descargarDatosIniciales,
   descargarCotizaciones,
+  descargarDatosIniciales,
+  sincronizarCotizaciones,
   verificarConexion,
 } from '@/src/config/api';
-
+import {
+  guardarClientesCache,
+  guardarMunicipiosCache,
+  guardarProductosCache,
+  limpiarCotizaciones,
+  marcarComoSincronizada,
+  obtenerCotizacionesPendientes,
+  obtenerEstadisticasSincronizacion,
+  reconciliarCotizaciones,
+  insertarDesdeSincronizacion,
+} from '@/src/database/db';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 export default function SincronizacionScreen() {
   const [pendientes, setPendientes] = useState<any[]>([]);
   const [estadisticas, setEstadisticas] = useState({
@@ -71,7 +72,7 @@ export default function SincronizacionScreen() {
 
   const ejecutarSincronizacionCompleta = async () => {
     setLoading(true);
-    
+
     try {
       // PASO 1: Enviar cotizaciones pendientes
       if (pendientes.length > 0) {
@@ -87,33 +88,42 @@ export default function SincronizacionScreen() {
         // hasta: new Date().toISOString().split('T')[0]
       });
 
+
+
       if (!resultadoDescarga.success) {
         throw new Error(resultadoDescarga.error);
       }
 
-      // PASO 3: Reconciliar con la base de datos local
-      setProgreso('🔄 Reconciliando cotizaciones...');
-      const resultadoReconciliacion = await reconciliarCotizaciones(
-        resultadoDescarga.data
-      );
+      // 🧹 Limpiar tabla completamente
+      await limpiarCotizaciones();
+
+      setProgreso('📥 Guardando cotizaciones en base local...');
+
+      let insertadas = 0;
+
+      for (const cot of resultadoDescarga.data) {
+        await insertarDesdeSincronizacion(cot);
+        insertadas++;
+      }
 
       // Recargar datos
       await cargarDatos();
 
-      // Mostrar resumen
+      const nuevoStats = await obtenerEstadisticasSincronizacion();
+
       Alert.alert(
         '✅ Sincronización Completa',
         `
-🔼 Enviadas: ${pendientes.length}
-🔽 Descargadas: ${resultadoDescarga.data.length}
+      🔼 Enviadas: ${pendientes.length}
+      🔽 Descargadas: ${resultadoDescarga.data.length}
 
-📊 Resultado:
-- Insertadas: ${resultadoReconciliacion.insertadas}
-- Actualizadas: ${resultadoReconciliacion.actualizadas}
-- Omitidas: ${resultadoReconciliacion.omitidas}
-- Eliminadas: ${resultadoReconciliacion.eliminadas}
+      📊 Resultado:
+      - Insertadas: ${insertadas}
+      - Actualizadas: 0
+      - Omitidas: 0
+      - Eliminadas: 0
 
-Total local: ${estadisticas.total + resultadoReconciliacion.insertadas - resultadoReconciliacion.eliminadas}
+      Total local: ${nuevoStats.total}
         `.trim()
       );
     } catch (error: any) {
@@ -141,7 +151,7 @@ Total local: ${estadisticas.total + resultadoReconciliacion.insertadas - resulta
       }
 
       const data = resultado.data;
-      
+
       // Marcar como sincronizadas las exitosas
       if (data.detalles) {
         for (const r of data.detalles) {
@@ -190,8 +200,7 @@ Total local: ${estadisticas.total + resultadoReconciliacion.insertadas - resulta
 
       Alert.alert(
         '✅ Éxito',
-        `Datos actualizados:\n\n📦 ${datos.productos?.length || 0} productos\n👥 ${
-          datos.clientes?.length || 0
+        `Datos actualizados:\n\n📦 ${datos.productos?.length || 0} productos\n👥 ${datos.clientes?.length || 0
         } clientes\n📍 ${datos.municipios?.length || 0} municipios`
       );
     } catch (error: any) {
@@ -219,7 +228,7 @@ Total local: ${estadisticas.total + resultadoReconciliacion.insertadas - resulta
       {/* Estadísticas */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>📊 Estado de Cotizaciones</Text>
-        
+
         <View style={styles.statsGrid}>
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{estadisticas.total}</Text>
